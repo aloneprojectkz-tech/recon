@@ -157,6 +157,36 @@ async def get_keyboard(user_id: int):
     return main_menu_keyboard()
 
 
+async def send_result(message: Message, progress_msg, result: dict, query: str):
+    """Send result as text if short, or as JSON file if too long."""
+    import json as _json
+    from io import BytesIO
+    from aiogram.types import BufferedInputFile
+
+    text = format_results(result)
+
+    if len(text) <= 4000:
+        try:
+            await progress_msg.edit_text(text, parse_mode="HTML", disable_web_page_preview=True)
+        except Exception:
+            await message.answer(text, parse_mode="HTML", disable_web_page_preview=True)
+    else:
+        # Send short summary + JSON file
+        summary = text[:1500] + "\n\n<i>📎 Полный результат — в файле ниже.</i>"
+        try:
+            await progress_msg.edit_text(summary, parse_mode="HTML", disable_web_page_preview=True)
+        except Exception:
+            await message.answer(summary, parse_mode="HTML", disable_web_page_preview=True)
+
+        json_bytes = _json.dumps(result, ensure_ascii=False, indent=2).encode("utf-8")
+        filename = f"recon_{query.replace('@','').replace('+','').replace(' ','_')}.json"
+        await message.answer_document(
+            BufferedInputFile(json_bytes, filename=filename),
+            caption=f"📄 Полный отчёт: <code>{query}</code>",
+            parse_mode="HTML",
+        )
+
+
 def format_results(result: dict) -> str:
     """Format search results into a readable message."""
     search_type = result.get("type", "username")
@@ -266,7 +296,16 @@ def _format_phone_results(result: dict) -> str:
             continue
         lines.append(f"🔍 <b>{name}:</b>")
         for k, v in data.items():
-            if v and k not in ("error",):
+            if not v or k == "error":
+                continue
+            # googlesearch returns lists of dorks with URLs
+            if isinstance(v, list):
+                lines.append(f"  └ {k}:")
+                for item in v[:5]:  # max 5
+                    if isinstance(item, dict) and item.get("url"):
+                        label = item.get("dork", item["url"])[:60]
+                        lines.append(f"      • <a href='{item[\"url\"]}'>{label}</a>")
+            else:
                 lines.append(f"  └ {k}: {v}")
         lines.append("")
 
@@ -474,11 +513,7 @@ async def process_username_search(message: Message, state: FSMContext):
         )
         return
 
-    text = format_results(result)
-    try:
-        await progress_msg.edit_text(text, parse_mode="HTML", disable_web_page_preview=True)
-    except Exception:
-        await message.answer(text, parse_mode="HTML", disable_web_page_preview=True)
+    await send_result(message, progress_msg, result, username)
 
 
 # ── Handlers: Email Search ────────────────────────────────────────────────────
@@ -556,11 +591,7 @@ async def process_email_search(message: Message, state: FSMContext):
         )
         return
 
-    text = format_results(result)
-    try:
-        await progress_msg.edit_text(text, parse_mode="HTML", disable_web_page_preview=True)
-    except Exception:
-        await message.answer(text, parse_mode="HTML", disable_web_page_preview=True)
+    await send_result(message, progress_msg, result, email)
 
 
 # ── Handlers: Phone Search ────────────────────────────────────────────────────
@@ -607,11 +638,7 @@ async def process_phone_search(message: Message, state: FSMContext):
     result = await search_phone(phone)
     await db.save_search(pool, message.from_user.id, "phone", phone, 0)
 
-    text = format_results(result)
-    try:
-        await progress_msg.edit_text(text, parse_mode="HTML", disable_web_page_preview=True)
-    except Exception:
-        await message.answer(text, parse_mode="HTML", disable_web_page_preview=True)
+    await send_result(message, progress_msg, result, phone)
 
 
 # ── Admin Panel ───────────────────────────────────────────────────────────────
