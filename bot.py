@@ -315,14 +315,15 @@ def _format_phone_results(result: dict) -> str:
         for k, v in data.items():
             if not v or k == "error":
                 continue
-            # googlesearch returns lists of dorks with URLs
             if isinstance(v, list):
-                lines.append(f"  └ {k}:")
-                for item in v[:5]:  # max 5
-                    if isinstance(item, dict) and item.get("url"):
-                        label = item.get("dork", item["url"])[:60]
-                        url = item["url"]
-                        lines.append(f"      • <a href='{url}'>{label}</a>")
+                lines.append(f"  └ {k}: ({len(v)} результатов)")
+                for item in v[:3]:
+                    if isinstance(item, dict):
+                        url = item.get("url", "")
+                        if url:
+                            lines.append(f"      • {url}")
+                    elif isinstance(item, str):
+                        lines.append(f"      • {item}")
             else:
                 lines.append(f"  └ {k}: {v}")
         lines.append("")
