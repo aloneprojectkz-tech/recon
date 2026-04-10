@@ -29,6 +29,9 @@ from keyboards import (
 )
 from blackbird_runner import search_username, search_email, search_email_full, search_phone
 
+# Per-user last result cache for export
+_last_results: dict = {}
+
 # ── Logging ──────────────────────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
@@ -164,20 +167,34 @@ async def send_result(message: Message, progress_msg, result: dict, query: str):
     from aiogram.types import BufferedInputFile
 
     text = format_results(result)
+    search_type = result.get("type", "username")
+
+    # Store last result per user for export
+    _last_results[message.from_user.id] = result
 
     if len(text) <= 4000:
         try:
-            await progress_msg.edit_text(text, parse_mode="HTML", disable_web_page_preview=True)
+            await progress_msg.edit_text(
+                text, parse_mode="HTML", disable_web_page_preview=True,
+                reply_markup=results_keyboard(query, search_type),
+            )
         except Exception:
-            await message.answer(text, parse_mode="HTML", disable_web_page_preview=True)
+            await message.answer(
+                text, parse_mode="HTML", disable_web_page_preview=True,
+                reply_markup=results_keyboard(query, search_type),
+            )
     else:
-        # Send short summary + JSON file
         summary = text[:1500] + "\n\n<i>📎 Полный результат — в файле ниже.</i>"
         try:
-            await progress_msg.edit_text(summary, parse_mode="HTML", disable_web_page_preview=True)
+            await progress_msg.edit_text(
+                summary, parse_mode="HTML", disable_web_page_preview=True,
+                reply_markup=results_keyboard(query, search_type),
+            )
         except Exception:
-            await message.answer(summary, parse_mode="HTML", disable_web_page_preview=True)
-
+            await message.answer(
+                summary, parse_mode="HTML", disable_web_page_preview=True,
+                reply_markup=results_keyboard(query, search_type),
+            )
         json_bytes = _json.dumps(result, ensure_ascii=False, indent=2).encode("utf-8")
         filename = f"recon_{query.replace('@','').replace('+','').replace(' ','_')}.json"
         await message.answer_document(
@@ -833,6 +850,77 @@ async def new_search_callback(call: CallbackQuery, state: FSMContext):
         await state.set_state(SearchState.waiting_email)
         await call.message.answer(
             "📧 Введите email для поиска:", reply_markup=cancel_keyboard()
+        )
+
+
+# ── Export callbacks ──────────────────────────────────────────────────────────
+@dp.callback_query(F.data.startswith("export_"))
+async def export_callback(call: CallbackQuery):
+    import json as _json
+    import csv as _csv
+    from io import StringIO
+    from aiogram.types import BufferedInputFile
+
+    await call.answer("⏳ Готовлю файл...")
+
+    uid = call.from_user.id
+    result = _last_results.get(uid)
+    if not result:
+        await call.message.answer("❌ Нет данных для экспорта. Сначала выполните поиск.")
+        return
+
+    parts = call.data.split("_")  # export_json_username
+    fmt = parts[1]
+    query = result.get("query", "result")
+    filename_base = query.replace("@", "").replace("+", "").replace(" ", "_")
+
+    if fmt == "json":
+        content = _json.dumps(result, ensure_ascii=False, indent=2).encode("utf-8")
+        filename = f"recon_{filename_base}.json"
+        await call.message.answer_document(
+            BufferedInputFile(content, filename=filename),
+            caption="📄 <b>JSON экспорт</b>", parse_mode="HTML",
+        )
+
+    elif fmt == "csv":
+        output = StringIO()
+        writer = _csv.writer(output)
+        if result.get("type") == "phone":
+            writer.writerow(["field", "value"])
+            num = result.get("number_info") or {}
+            for k, v in num.items():
+                if v: writer.writerow([k, v])
+            for p in result.get("registered_platforms", []):
+                writer.writerow(["platform", p])
+        else:
+            writer.writerow(["name", "url", "category", "metadata"])
+            for acc in result.get("found", []):
+                meta = "; ".join(f"{m['name']}:{m['value']}" for m in (acc.get("metadata") or []))
+                writer.writerow([acc.get("name",""), acc.get("url",""), acc.get("category",""), meta])
+        content = output.getvalue().encode("utf-8-sig")
+        filename = f"recon_{filename_base}.csv"
+        await call.message.answer_document(
+            BufferedInputFile(content, filename=filename),
+            caption="📊 <b>CSV экспорт</b>", parse_mode="HTML",
+        )
+
+    elif fmt == "txt":
+        lines = [f"Recon OSINT — {result.get('type','').upper()} — {query}", "=" * 50]
+        if result.get("type") == "phone":
+            num = result.get("number_info") or {}
+            for k, v in num.items():
+                if v: lines.append(f"{k}: {v}")
+            lines.append("")
+            for p in result.get("registered_platforms", []):
+                lines.append(f"Platform: {p}")
+        else:
+            for acc in result.get("found", []):
+                lines.append(f"[{acc.get('category','')}] {acc.get('name','')} — {acc.get('url','')}")
+        content = "\n".join(lines).encode("utf-8")
+        filename = f"recon_{filename_base}.txt"
+        await call.message.answer_document(
+            BufferedInputFile(content, filename=filename),
+            caption="📝 <b>TXT экспорт</b>", parse_mode="HTML",
         )
 
 
