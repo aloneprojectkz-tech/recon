@@ -867,24 +867,30 @@ function showError(msg) {
 function renderPhoneResults(result, container) {
   const num = result.number_info || {};
   const scanners = result.scanners || [];
+  const platforms = result.registered_platforms || [];
+
   let html = `
     <div class="results-header fade-up">
       <div class="results-title"><i class="fa-solid fa-phone"></i> Номер: ${escHtml(result.query)}</div>
       <div class="results-meta">
         <span class="badge badge-found"><i class="fa-solid fa-check"></i> ${num.valid ? 'Валидный' : 'Невалидный'}</span>
-        ${num.country ? `<span class="badge badge-time"><i class="fa-solid fa-flag"></i> ${escHtml(num.country)}</span>` : ''}
+        ${num.country_code ? `<span class="badge badge-time"><i class="fa-solid fa-flag"></i> ${escHtml(num.country_code)}</span>` : ''}
+        ${num.line_type ? `<span class="badge badge-time"><i class="fa-solid fa-mobile"></i> ${escHtml(num.line_type)}</span>` : ''}
       </div>
     </div>`;
 
-  if (num.international || num.local || num.carrier) {
-    html += `<div class="category-group fade-up"><div class="category-title">Информация о номере <span class="category-count">phoneinfoga</span></div><div class="account-grid">`;
-    const fields = [
-      ['Международный', num.international],
-      ['Локальный', num.local],
-      ['Страна', num.country],
-      ['Оператор', num.carrier],
-      ['Код страны', num.countryCode],
-    ].filter(([,v]) => v);
+  // Number info block
+  const fields = [
+    ['Номер', num.international_format],
+    ['Страна', num.country_name],
+    ['Регион', num.location],
+    ['Оператор', num.carrier],
+    ['Тип линии', num.line_type],
+    ['Код страны', num.country_code],
+  ].filter(([,v]) => v);
+
+  if (fields.length) {
+    html += `<div class="category-group fade-up"><div class="category-title">Информация о номере <span class="category-count">numverify</span></div><div class="account-grid">`;
     for (const [k, v] of fields) {
       html += `<div class="account-card" style="cursor:default">
         <div class="account-name"><span class="dot"></span>${escHtml(k)}</div>
@@ -894,6 +900,19 @@ function renderPhoneResults(result, container) {
     html += `</div></div>`;
   }
 
+  // Registered platforms
+  if (platforms.length) {
+    html += `<div class="category-group fade-up"><div class="category-title">Найден на платформах <span class="category-count">${platforms.length}</span></div><div class="account-grid">`;
+    for (const p of platforms) {
+      html += `<div class="account-card" style="cursor:default">
+        <div class="account-name"><span class="dot"></span>${escHtml(p)}</div>
+        <div class="account-url">online profile was found</div>
+      </div>`;
+    }
+    html += `</div></div>`;
+  }
+
+  // Scanner results
   for (const s of scanners) {
     const data = s.data || {};
     const entries = Object.entries(data).filter(([k,v]) => v && k !== 'error');
@@ -908,7 +927,7 @@ function renderPhoneResults(result, container) {
     html += `</div></div>`;
   }
 
-  if (!num.international && !scanners.length) {
+  if (!fields.length && !platforms.length && !scanners.length) {
     html += `<div class="empty-state fade-up"><div class="empty-icon"><i class="fa-solid fa-circle-xmark"></i></div><div class="empty-title">Данные не найдены</div></div>`;
   }
 
