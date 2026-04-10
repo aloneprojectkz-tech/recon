@@ -859,6 +859,98 @@ function renderResults(result, query) {
   container.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
+// ── Last result store for export ─────────────────────────────────────────────
+let lastResult = null;
+
+function renderResults(result, query) {
+  const container = document.getElementById('results');
+  if (!result || !result.success) {
+    container.innerHTML = `<div class="error-msg fade-up"><i class="fa-solid fa-triangle-exclamation"></i> ${escHtml(result?.error || 'Неизвестная ошибка')}</div>`;
+    return;
+  }
+
+  lastResult = { result, query };
+
+  if (result.type === 'phone') {
+    renderPhoneResults(result, container);
+    appendExportBar(container);
+    return;
+  }
+
+  const found   = result.found || [];
+  const total   = result.total_checked || 0;
+  const elapsed = result.elapsed || 0;
+
+  if (!found.length) {
+    container.innerHTML = `
+      <div class="empty-state fade-up">
+        <div class="empty-icon"><i class="fa-solid fa-circle-xmark"></i></div>
+        <div class="empty-title">Аккаунты не найдены</div>
+        <div class="empty-sub">Проверено ${total} сайтов за ${elapsed}с. Попробуйте другой запрос.</div>
+      </div>`;
+    return;
+  }
+
+  const cats = {};
+  for (const acc of found) {
+    const cat = acc.category || 'Other';
+    if (!cats[cat]) cats[cat] = [];
+    cats[cat].push(acc);
+  }
+
+  let html = `
+    <div class="results-header fade-up">
+      <div class="results-title"><i class="fa-solid fa-radar"></i> Результаты для «${escHtml(query)}»</div>
+      <div class="results-meta">
+        <span class="badge badge-found"><i class="fa-solid fa-check"></i> ${found.length} найдено</span>
+        <span class="badge badge-time"><i class="fa-regular fa-clock"></i> ${elapsed}с / ${total} сайтов</span>
+      </div>
+    </div>`;
+
+  // Domain info block for email searches
+  const di = result.domain_info;
+  if (di && result.type === 'email') {
+    const mx = (di.mx_records || [])[0];
+    const w = di.whois || {};
+    html += `<div class="category-group fade-up" style="margin-bottom:16px">
+      <div class="category-title"><i class="fa-solid fa-globe" style="margin-right:6px"></i>Домен: ${escHtml(di.domain)} <span class="category-count">DNS/WHOIS</span></div>
+      <div class="account-grid">
+        ${mx ? `<div class="account-card copy-card" onclick="copyText('${escAttr(mx.host)}')"><div class="account-name"><span class="dot"></span>MX</div><div class="account-url">${escHtml(mx.host)}</div></div>` : ''}
+        ${di.spf ? `<div class="account-card copy-card" onclick="copyText('${escAttr(di.spf)}')"><div class="account-name"><span class="dot"></span>SPF</div><div class="account-url" style="white-space:normal;word-break:break-all">${escHtml(di.spf.slice(0,120))}</div></div>` : ''}
+        ${di.dmarc ? `<div class="account-card copy-card" onclick="copyText('${escAttr(di.dmarc)}')"><div class="account-name"><span class="dot"></span>DMARC</div><div class="account-url" style="white-space:normal;word-break:break-all">${escHtml(di.dmarc.slice(0,120))}</div></div>` : ''}
+        ${w.creation_date ? `<div class="account-card copy-card" onclick="copyText('${escAttr(w.creation_date)}')"><div class="account-name"><span class="dot"></span>Зарегистрирован</div><div class="account-url">${escHtml(w.creation_date)}</div></div>` : ''}
+        ${w.registrar ? `<div class="account-card copy-card" onclick="copyText('${escAttr(w.registrar)}')"><div class="account-name"><span class="dot"></span>Регистратор</div><div class="account-url">${escHtml(w.registrar)}</div></div>` : ''}
+      </div>
+    </div>`;
+  }
+
+  let delay = 0;
+  for (const [cat, accounts] of Object.entries(cats).sort()) {
+    html += `<div class="category-group result-item" style="animation-delay:${delay}s">`;
+    html += `<div class="category-title">${escHtml(cat)} <span class="category-count">${accounts.length}</span></div>`;
+    html += `<div class="account-grid">`;
+    for (const acc of accounts) {
+      const meta = (acc.metadata || []).slice(0, 3);
+      const metaHtml = meta.length
+        ? `<div class="account-meta">${meta.map(m => `<div class="meta-item"><strong>${escHtml(m.name)}:</strong> ${escHtml(String(m.value || ''))}</div>`).join('')}</div>`
+        : '';
+      html += `
+        <a class="account-card" href="${escAttr(acc.url)}" target="_blank" rel="noopener noreferrer">
+          <div class="account-name"><span class="dot"></span>${escHtml(acc.name)}</div>
+          <div class="account-url">${escHtml(acc.url)}</div>
+          ${metaHtml}
+          <i class="fa-solid fa-arrow-up-right-from-square account-arrow"></i>
+        </a>`;
+    }
+    html += `</div></div>`;
+    delay += 0.05;
+  }
+
+  container.innerHTML = html;
+  appendExportBar(container);
+  container.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
 function showError(msg) {
   document.getElementById('results').innerHTML =
     `<div class="error-msg fade-up"><i class="fa-solid fa-triangle-exclamation"></i> ${escHtml(msg)}</div>`;
@@ -879,7 +971,7 @@ function renderPhoneResults(result, container) {
       </div>
     </div>`;
 
-  // Number info block
+  // Number info — copy on click
   const fields = [
     ['Номер', num.international_format],
     ['Страна', num.country_name],
@@ -892,9 +984,10 @@ function renderPhoneResults(result, container) {
   if (fields.length) {
     html += `<div class="category-group fade-up"><div class="category-title">Информация о номере <span class="category-count">numverify</span></div><div class="account-grid">`;
     for (const [k, v] of fields) {
-      html += `<div class="account-card" style="cursor:default">
+      html += `<div class="account-card copy-card" onclick="copyText('${escAttr(String(v))}')">
         <div class="account-name"><span class="dot"></span>${escHtml(k)}</div>
         <div class="account-url">${escHtml(String(v))}</div>
+        <i class="fa-regular fa-copy account-arrow"></i>
       </div>`;
     }
     html += `</div></div>`;
@@ -904,27 +997,58 @@ function renderPhoneResults(result, container) {
   if (platforms.length) {
     html += `<div class="category-group fade-up"><div class="category-title">Найден на платформах <span class="category-count">${platforms.length}</span></div><div class="account-grid">`;
     for (const p of platforms) {
-      html += `<div class="account-card" style="cursor:default">
+      html += `<div class="account-card copy-card" onclick="copyText('${escAttr(p)}')">
         <div class="account-name"><span class="dot"></span>${escHtml(p)}</div>
         <div class="account-url">online profile was found</div>
+        <i class="fa-regular fa-copy account-arrow"></i>
       </div>`;
     }
     html += `</div></div>`;
   }
 
-  // Scanner results
+  // Scanner results — special handling for googlesearch (lists of dorks)
   for (const s of scanners) {
     const data = s.data || {};
     const entries = Object.entries(data).filter(([k,v]) => v && k !== 'error');
     if (!entries.length) continue;
-    html += `<div class="category-group fade-up"><div class="category-title">${escHtml(s.scanner)} <span class="category-count">${entries.length}</span></div><div class="account-grid">`;
-    for (const [k, v] of entries) {
-      html += `<div class="account-card" style="cursor:default">
-        <div class="account-name"><span class="dot"></span>${escHtml(k)}</div>
-        <div class="account-url">${escHtml(String(v))}</div>
-      </div>`;
+
+    if (s.scanner === 'googlesearch') {
+      // Render dork links properly — never as clickable card href
+      html += `<div class="category-group fade-up"><div class="category-title">googlesearch <span class="category-count">${entries.length}</span></div>`;
+      for (const [k, v] of entries) {
+        const items = Array.isArray(v) ? v : [v];
+        html += `<div style="margin-bottom:10px"><div class="category-title" style="font-size:9px;margin-bottom:6px">${escHtml(k)}</div><div class="account-grid">`;
+        for (const item of items.slice(0, 6)) {
+          if (item && typeof item === 'object' && item.url) {
+            const label = item.dork ? item.dork.replace(/^site:/, '').split(' ')[0] : item.url;
+            html += `<a class="account-card" href="${escAttr(item.url)}" target="_blank" rel="noopener noreferrer">
+              <div class="account-name"><span class="dot"></span>${escHtml(label.slice(0,40))}</div>
+              <div class="account-url" style="font-size:9px">${escHtml(item.url.slice(0,60))}...</div>
+              <i class="fa-solid fa-arrow-up-right-from-square account-arrow"></i>
+            </a>`;
+          } else if (typeof item === 'string') {
+            html += `<div class="account-card copy-card" onclick="copyText('${escAttr(item)}')">
+              <div class="account-name"><span class="dot"></span>${escHtml(item.slice(0,40))}</div>
+              <i class="fa-regular fa-copy account-arrow"></i>
+            </div>`;
+          }
+        }
+        html += `</div></div>`;
+      }
+      html += `</div>`;
+    } else {
+      // local, ovh, numverify — copy-on-click cards
+      html += `<div class="category-group fade-up"><div class="category-title">${escHtml(s.scanner)} <span class="category-count">${entries.length}</span></div><div class="account-grid">`;
+      for (const [k, v] of entries) {
+        const display = typeof v === 'object' ? JSON.stringify(v) : String(v);
+        html += `<div class="account-card copy-card" onclick="copyText('${escAttr(display)}')">
+          <div class="account-name"><span class="dot"></span>${escHtml(k)}</div>
+          <div class="account-url">${escHtml(display.slice(0, 80))}</div>
+          <i class="fa-regular fa-copy account-arrow"></i>
+        </div>`;
+      }
+      html += `</div></div>`;
     }
-    html += `</div></div>`;
   }
 
   if (!fields.length && !platforms.length && !scanners.length) {
@@ -934,11 +1058,126 @@ function renderPhoneResults(result, container) {
   container.innerHTML = html;
 }
 
+// ── Copy to clipboard ─────────────────────────────────────────────────────────
+function copyText(text) {
+  navigator.clipboard.writeText(text).then(() => showToast('📋 Скопировано')).catch(() => {
+    // fallback
+    const el = document.createElement('textarea');
+    el.value = text;
+    el.style.position = 'fixed'; el.style.opacity = '0';
+    document.body.appendChild(el); el.select();
+    document.execCommand('copy');
+    document.body.removeChild(el);
+    showToast('📋 Скопировано');
+  });
+}
+
+function showToast(msg) {
+  let t = document.getElementById('toast');
+  if (!t) {
+    t = document.createElement('div');
+    t.id = 'toast';
+    t.style.cssText = `
+      position:fixed; bottom:28px; left:50%; transform:translateX(-50%) translateY(20px);
+      background:var(--surface2); border:1px solid var(--accent); color:var(--accent);
+      font-family:var(--mono); font-size:12px; padding:10px 20px; border-radius:8px;
+      opacity:0; transition:all .25s; z-index:9999; pointer-events:none;
+      box-shadow:0 4px 20px var(--accent-glow);
+    `;
+    document.body.appendChild(t);
+  }
+  t.textContent = msg;
+  t.style.opacity = '1'; t.style.transform = 'translateX(-50%) translateY(0)';
+  clearTimeout(t._timer);
+  t._timer = setTimeout(() => {
+    t.style.opacity = '0'; t.style.transform = 'translateX(-50%) translateY(20px)';
+  }, 2000);
+}
+
+// ── Export bar ────────────────────────────────────────────────────────────────
+function appendExportBar(container) {
+  if (!lastResult) return;
+  const bar = document.createElement('div');
+  bar.style.cssText = 'display:flex;gap:8px;margin-top:24px;flex-wrap:wrap;';
+  bar.innerHTML = `
+    <span style="font-family:var(--mono);font-size:10px;color:var(--muted);align-self:center;letter-spacing:2px;text-transform:uppercase;margin-right:4px"><i class="fa-solid fa-download"></i> ЭКСПОРТ:</span>
+    <button class="export-btn" onclick="exportResult('json')"><i class="fa-solid fa-code"></i> JSON</button>
+    <button class="export-btn" onclick="exportResult('csv')"><i class="fa-solid fa-table"></i> CSV</button>
+    <button class="export-btn" onclick="exportResult('txt')"><i class="fa-solid fa-file-lines"></i> TXT</button>
+  `;
+  container.appendChild(bar);
+}
+
+function exportResult(fmt) {
+  if (!lastResult) return;
+  const { result, query } = lastResult;
+  const filename = `recon_${query.replace(/[^a-zA-Z0-9]/g,'_')}.${fmt}`;
+  let content = '', mime = 'text/plain';
+
+  if (fmt === 'json') {
+    content = JSON.stringify(result, null, 2);
+    mime = 'application/json';
+  } else if (fmt === 'csv') {
+    const rows = [['type','query','name','url','category','metadata']];
+    if (result.type === 'phone') {
+      const num = result.number_info || {};
+      for (const [k,v] of Object.entries(num)) {
+        if (v) rows.push(['phone_info', query, k, String(v), 'numverify', '']);
+      }
+      for (const p of (result.registered_platforms || [])) {
+        rows.push(['platform', query, p, '', 'registered', '']);
+      }
+    } else {
+      for (const acc of (result.found || [])) {
+        const meta = (acc.metadata || []).map(m => `${m.name}:${m.value}`).join('; ');
+        rows.push([result.type, query, acc.name, acc.url, acc.category, meta]);
+      }
+    }
+    content = rows.map(r => r.map(c => `"${String(c).replace(/"/g,'""')}"`).join(',')).join('\n');
+    mime = 'text/csv';
+  } else {
+    // TXT
+    const lines = [`Recon OSINT — ${result.type.toUpperCase()} — ${query}`, '='.repeat(50)];
+    if (result.type === 'phone') {
+      const num = result.number_info || {};
+      for (const [k,v] of Object.entries(num)) { if (v) lines.push(`${k}: ${v}`); }
+      lines.push('');
+      for (const p of (result.registered_platforms || [])) lines.push(`Platform: ${p}`);
+    } else {
+      for (const acc of (result.found || [])) {
+        lines.push(`[${acc.category}] ${acc.name} — ${acc.url}`);
+      }
+    }
+    content = lines.join('\n');
+  }
+
+  const blob = new Blob([content], { type: mime });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(a.href);
+  showToast(`✅ Сохранено: ${filename}`);
+}
+
 function escHtml(s) {
   return String(s).replace(/[&<>"']/g, c =>
     ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 function escAttr(s) { return String(s).replace(/"/g, '&quot;'); }
 </script>
+
+<style>
+.copy-card { cursor: pointer !important; }
+.copy-card:hover .account-arrow { color: var(--accent) !important; }
+.export-btn {
+  font-family: var(--mono); font-size: 11px; font-weight: 700;
+  letter-spacing: 1px; padding: 8px 16px; border-radius: 8px;
+  border: 1px solid var(--border2); background: var(--surface2);
+  color: var(--muted); cursor: pointer; transition: all .15s;
+  display: flex; align-items: center; gap: 6px;
+}
+.export-btn:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); }
+</style>
 </body>
 </html>
