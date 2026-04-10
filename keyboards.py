@@ -52,5 +52,10 @@ def cancel_keyboard() -> ReplyKeyboardMarkup:
 
 def results_keyboard(query: str, search_type: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="📄 JSON", callback_data=f"export_json_{search_type}"),
+            InlineKeyboardButton(text="📊 CSV", callback_data=f"export_csv_{search_type}"),
+            InlineKeyboardButton(text="📝 TXT", callback_data=f"export_txt_{search_type}"),
+        ],
         [InlineKeyboardButton(text="🔄 Новый поиск", callback_data=f"new_search_{search_type}")],
     ])
