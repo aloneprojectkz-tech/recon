@@ -231,36 +231,47 @@ def _format_phone_results(result: dict) -> str:
     if not result.get("success"):
         return header + f"❌ Ошибка: {result.get('error', 'неизвестная ошибка')}"
 
-    num = result.get("number_info", {})
+    num = result.get("number_info") or {}
     lines = [header]
 
     if num:
         lines.append("📋 <b>Информация о номере:</b>")
         if num.get("valid") is not None:
             lines.append(f"  ✅ Валидный: {'Да' if num['valid'] else 'Нет'}")
-        if num.get("international"):
-            lines.append(f"  🌍 Международный: <code>{num['international']}</code>")
-        if num.get("local"):
-            lines.append(f"  📱 Локальный: <code>{num['local']}</code>")
-        if num.get("country"):
-            lines.append(f"  🏳 Страна: {num['country']}")
-        if num.get("carrier"):
-            lines.append(f"  📡 Оператор: {num['carrier']}")
+        for label, key in [
+            ("📱 Номер", "international_format"),
+            ("🌍 Страна", "country_name"),
+            ("📍 Регион", "location"),
+            ("📡 Оператор", "carrier"),
+            ("📶 Тип линии", "line_type"),
+            ("🏳 Код страны", "country_code"),
+        ]:
+            val = num.get(key) or num.get(key.split("_")[0])
+            if val:
+                lines.append(f"  {label}: {val}")
+        lines.append("")
+
+    platforms = result.get("registered_platforms", [])
+    if platforms:
+        lines.append(f"🔗 <b>Найден на платформах:</b>")
+        for p in platforms:
+            lines.append(f"  ✅ {p}")
         lines.append("")
 
     scanners = result.get("scanners", [])
-    if scanners:
-        lines.append("🔍 <b>Результаты сканеров:</b>")
-        for s in scanners:
-            name = s.get("scanner", "?")
-            data = s.get("data", {})
-            lines.append(f"\n  <b>{name}:</b>")
-            if isinstance(data, dict):
-                for k, v in data.items():
-                    if v and k not in ("error",):
-                        lines.append(f"    └ {k}: {v}")
-    else:
-        lines.append("ℹ️ Сканеры не вернули дополнительных данных.")
+    for s in scanners:
+        name = s.get("scanner", "?")
+        data = s.get("data", {})
+        if not data:
+            continue
+        lines.append(f"🔍 <b>{name}:</b>")
+        for k, v in data.items():
+            if v and k not in ("error",):
+                lines.append(f"  └ {k}: {v}")
+        lines.append("")
+
+    if not num and not scanners and not platforms:
+        lines.append("ℹ️ Данные не найдены.")
 
     text = "\n".join(lines)
     if len(text) > 4000:
