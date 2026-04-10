@@ -321,7 +321,8 @@ def _format_phone_results(result: dict) -> str:
                 for item in v[:5]:  # max 5
                     if isinstance(item, dict) and item.get("url"):
                         label = item.get("dork", item["url"])[:60]
-                        lines.append(f"      • <a href='{item[\"url\"]}'>{label}</a>")
+                        url = item["url"]
+                        lines.append(f"      • <a href='{url}'>{label}</a>")
             else:
                 lines.append(f"  └ {k}: {v}")
         lines.append("")
