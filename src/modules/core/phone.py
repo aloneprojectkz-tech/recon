@@ -1,9 +1,15 @@
 """
 Phone number OSINT via PhoneInfoga REST API.
 PhoneInfoga runs as a sidecar service in Docker.
+
+API base: /api
+Routes:
+  GET /api/numbers/:number/scan/local        -> number info (local library)
+  GET /api/numbers/:number/scan/numverify    -> numverify data
+  GET /api/numbers/:number/scan/googlesearch -> google dorks
+  GET /api/numbers/:number/scan/ovh          -> OVH carrier data
 """
 
-import asyncio
 import aiohttp
 import logging
 import os
@@ -12,16 +18,20 @@ logger = logging.getLogger(__name__)
 
 PHONEINFOGA_URL = os.getenv("PHONEINFOGA_URL", "http://localhost:5100")
 
+SCANNERS = ("local", "numverify", "googlesearch", "ovh")
+
 
 async def search_phone(phone: str) -> dict:
     """
     Search phone number using PhoneInfoga REST API.
     Returns structured result dict.
     """
-    # Normalize: strip spaces/dashes, ensure starts with +
+    # Normalize: strip spaces/dashes/parens, keep digits and leading +
     number = phone.strip().replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
     if not number.startswith("+"):
         number = "+" + number
+    # PhoneInfoga URL param uses the number without +
+    num_param = number.lstrip("+")
 
     result = {
         "success": False,
@@ -35,39 +45,33 @@ async def search_phone(phone: str) -> dict:
     try:
         timeout = aiohttp.ClientTimeout(total=60)
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            # 1. Validate & get number info
-            async with session.post(
-                f"{PHONEINFOGA_URL}/v2/numbers",
-                json={"number": number.lstrip("+")},
-            ) as resp:
-                if resp.status != 200:
-                    text = await resp.text()
-                    result["error"] = f"PhoneInfoga error: {text}"
-                    return result
-                num_data = await resp.json()
-                result["number_info"] = num_data
-
-            # 2. Get available scanners
-            async with session.get(f"{PHONEINFOGA_URL}/v2/scanners") as resp:
-                scanners_data = await resp.json()
-                scanner_names = [s["name"] for s in scanners_data.get("scanners", [])]
-
-            # 3. Run each scanner
             scan_results = []
-            for scanner_name in scanner_names:
+
+            for scanner in SCANNERS:
                 try:
-                    async with session.post(
-                        f"{PHONEINFOGA_URL}/v2/scanners/{scanner_name}/run",
-                        json={"number": number.lstrip("+"), "options": {}},
+                    async with session.get(
+                        f"{PHONEINFOGA_URL}/api/numbers/{num_param}/scan/{scanner}"
                     ) as resp:
                         if resp.status == 200:
                             data = await resp.json()
-                            scan_results.append({
-                                "scanner": scanner_name,
-                                "data": data,
-                            })
+                            payload = data.get("result") or {}
+
+                            # local scanner gives us the main number info
+                            if scanner == "local" and payload:
+                                result["number_info"] = payload
+
+                            # Only add scanner if it has non-empty values
+                            if isinstance(payload, dict) and any(
+                                v for v in payload.values() if v not in (None, "", False, 0, [])
+                            ):
+                                scan_results.append({
+                                    "scanner": scanner,
+                                    "data": payload,
+                                })
+                        else:
+                            logger.debug(f"Scanner {scanner} returned {resp.status}")
                 except Exception as e:
-                    logger.debug(f"Scanner {scanner_name} failed: {e}")
+                    logger.debug(f"Scanner {scanner} failed: {e}")
 
             result["scanners"] = scan_results
             result["success"] = True
